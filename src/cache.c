@@ -220,14 +220,52 @@ dcache_access(uint32_t addr)
     return dcacheHitTime + l2cache_access(addr);
 }
 
+void icache_invalid(uint32_t addr) {
+    if (icacheSets == 0) {
+        return;
+    }
+    uint32_t tag = addr >> (iBits + blockBits);
+    uint32_t loc = (addr >> blockBits) & (icacheSets - 1u);
+    for (uint32_t i = 0; i < icacheAssoc; i++) {
+        if (iCache.sets[loc].lines[i].lru < icacheAssoc && iCache.sets[loc].lines[i].tag == tag) {
+            // cache hit
+            for (uint32_t j = 0; j < icacheAssoc; j++) {
+                if (iCache.sets[loc].lines[j].lru < icacheAssoc && iCache.sets[loc].lines[j].lru > iCache.sets[loc].lines[i].lru) {
+                    iCache.sets[loc].lines[j].lru--;
+                }
+            }
+            iCache.sets[loc].lines[i].lru = -1;
+            return;
+        }
+    }
+}
+
+void dcache_invalid(uint32_t addr) {
+    if (dcacheSets == 0) {
+        return;
+    }
+    uint32_t tag = addr >> (dBits + blockBits);
+    uint32_t loc = (addr >> blockBits) & (dcacheSets - 1u);
+    for (uint32_t i = 0; i < dcacheAssoc; i++) {
+        if (dCache.sets[loc].lines[i].lru < dcacheAssoc && dCache.sets[loc].lines[i].tag == tag) {
+            // cache hit
+            for (uint32_t j = 0; j < dcacheAssoc; j++) {
+                if (dCache.sets[loc].lines[j].lru < icacheAssoc && dCache.sets[loc].lines[j].lru > dCache.sets[loc].lines[i].lru) {
+                    dCache.sets[loc].lines[j].lru--;
+                }
+            }
+            dCache.sets[loc].lines[i].lru = -1;
+            return;
+        }
+    }
+}
+
 // Perform a memory access to the l2cache for the address 'addr'
 // Return the access time for the memory operation
 //
 uint32_t
 l2cache_access(uint32_t addr)
 {
-    // TODO Inclusive L2 Cache
-
     if (l2cacheSets == 0) {
         return memspeed;
     }
@@ -257,6 +295,10 @@ l2cache_access(uint32_t addr)
         if (l2Cache.sets[loc].lines[j].lru < lru) {
             l2Cache.sets[loc].lines[j].lru++;
         }
+    }
+    if (inclusive) {
+        icache_invalid(addr);
+        dcache_invalid(addr);
     }
     l2Cache.sets[loc].lines[pos].lru = 0;
     l2Cache.sets[loc].lines[pos].tag = tag;

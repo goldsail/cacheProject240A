@@ -147,6 +147,7 @@ icache_access(uint32_t addr)
     if (icacheSets == 0) {
         return l2cache_access(addr);
     }
+    icacheRefs++;
     uint32_t tag = addr >> (iBits + blockBits);
     uint32_t loc = (addr >> blockBits) & (icacheSets - 1u);
     uint8_t lru = 0; // largest LRU bits encountered (-1 is largest)
@@ -169,6 +170,7 @@ icache_access(uint32_t addr)
     }
 
     // cache miss
+    icacheMisses++;
     for (uint32_t j = 0; j < icacheAssoc; j++) {
         if (iCache.sets[loc].lines[j].lru < lru) {
             iCache.sets[loc].lines[j].lru++;
@@ -176,7 +178,9 @@ icache_access(uint32_t addr)
     }
     iCache.sets[loc].lines[pos].lru = 0;
     iCache.sets[loc].lines[pos].tag = tag;
-    return icacheHitTime + l2cache_access(addr);
+    uint32_t penalty = l2cache_access(addr);
+    icachePenalties += penalty;
+    return icacheHitTime + penalty;
 }
 
 // Perform a memory access through the dcache interface for the address 'addr'
@@ -188,6 +192,7 @@ dcache_access(uint32_t addr)
     if (dcacheSets == 0) {
         return l2cache_access(addr);
     }
+    dcacheRefs++;
     uint32_t tag = addr >> (dBits + blockBits);
     uint32_t loc = (addr >> blockBits) & (dcacheSets - 1u);
     uint8_t lru = 0; // largest LRU bits encountered (-1 is largest)
@@ -210,6 +215,7 @@ dcache_access(uint32_t addr)
     }
 
     // cache miss
+    dcacheMisses++;
     for (uint32_t j = 0; j < dcacheAssoc; j++) {
         if (dCache.sets[loc].lines[j].lru < lru) {
             dCache.sets[loc].lines[j].lru++;
@@ -217,7 +223,9 @@ dcache_access(uint32_t addr)
     }
     dCache.sets[loc].lines[pos].lru = 0;
     dCache.sets[loc].lines[pos].tag = tag;
-    return dcacheHitTime + l2cache_access(addr);
+    uint32_t penalty = l2cache_access(addr);
+    dcachePenalties += penalty;
+    return dcacheHitTime + penalty;
 }
 
 void icache_invalid(uint32_t addr) {
@@ -269,6 +277,7 @@ l2cache_access(uint32_t addr)
     if (l2cacheSets == 0) {
         return memspeed;
     }
+    l2cacheRefs++;
     uint32_t tag = addr >> (l2Bits + blockBits);
     uint32_t loc = (addr >> blockBits) & (l2cacheSets - 1u);
     uint8_t lru = 0; // largest LRU bits encountered (-1 is largest)
@@ -291,16 +300,20 @@ l2cache_access(uint32_t addr)
     }
 
     // cache miss
+    l2cacheMisses++;
     for (uint32_t j = 0; j < l2cacheAssoc; j++) {
         if (l2Cache.sets[loc].lines[j].lru < lru) {
             l2Cache.sets[loc].lines[j].lru++;
         }
     }
     if (inclusive) {
+        // TODO debug
         icache_invalid(addr);
         dcache_invalid(addr);
     }
     l2Cache.sets[loc].lines[pos].lru = 0;
     l2Cache.sets[loc].lines[pos].tag = tag;
-    return memspeed;
+    uint32_t penalty = memspeed;
+    l2cachePenalties += penalty;
+    return l2cacheHitTime + penalty;
 }

@@ -6,6 +6,7 @@
 //  described in the README                               //
 //========================================================//
 
+#include <stdio.h>
 #include "cache.h"
 
 const char *studentName = "Fan Jin";
@@ -55,7 +56,6 @@ uint64_t l2cachePenalties; // L2$ penalties
 typedef struct {
     uint32_t tag;
     uint8_t lru;
-    uint8_t *data;
 } CacheLine;
 
 typedef struct {
@@ -105,8 +105,7 @@ init_cache()
         for (uint32_t i = 0; i < icacheSets; i++) {
             iCache.sets[i].lines = (CacheLine*)malloc(sizeof(CacheLine) * icacheAssoc);
             for (uint32_t j = 0; j < icacheAssoc; j++) {
-                iCache.sets[i].lines[j].lru = -1;
-                iCache.sets[i].lines[j].data = (uint8_t*)malloc(sizeof(uint8_t) * blocksize);
+                iCache.sets[i].lines[j].lru = icacheAssoc;
             }
         }
     }
@@ -118,8 +117,7 @@ init_cache()
         for (uint32_t i = 0; i < dcacheSets; i++) {
             dCache.sets[i].lines = (CacheLine*)malloc(sizeof(CacheLine) * dcacheAssoc);
             for (uint32_t j = 0; j < dcacheAssoc; j++) {
-                dCache.sets[i].lines[j].lru = -1;
-                dCache.sets[i].lines[j].data = (uint8_t*)malloc(sizeof(uint8_t) * blocksize);
+                dCache.sets[i].lines[j].lru = dcacheAssoc;
             }
         }
     }
@@ -131,8 +129,7 @@ init_cache()
         for (uint32_t i = 0; i < l2cacheSets; i++) {
             l2Cache.sets[i].lines = (CacheLine*)malloc(sizeof(CacheLine) * l2cacheAssoc);
             for (uint32_t j = 0; j < l2cacheAssoc; j++) {
-                l2Cache.sets[i].lines[j].lru = -1;
-                l2Cache.sets[i].lines[j].data = (uint8_t*)malloc(sizeof(uint8_t) * blocksize);
+                l2Cache.sets[i].lines[j].lru = l2cacheAssoc;
             }
         }
     }
@@ -150,35 +147,39 @@ icache_access(uint32_t addr)
     icacheRefs++;
     uint32_t tag = addr >> (iBits + blockBits);
     uint32_t loc = (addr >> blockBits) & (icacheSets - 1u);
-    uint8_t lru = 0; // largest LRU bits encountered (-1 is largest)
-    uint8_t pos = 0; // position to replace on cache miss
+    CacheLine *lines = iCache.sets[loc].lines;
+
     for (uint32_t i = 0; i < icacheAssoc; i++) {
-        if (iCache.sets[loc].lines[i].lru < icacheAssoc && iCache.sets[loc].lines[i].tag == tag) {
+        if (lines[i].lru < icacheAssoc && lines[i].tag == tag) {
             // cache hit
             for (uint32_t j = 0; j < icacheAssoc; j++) {
-                if (iCache.sets[loc].lines[j].lru < iCache.sets[loc].lines[i].lru) {
-                    iCache.sets[loc].lines[j].lru++;
+                if (lines[j].lru < lines[i].lru) {
+                    lines[j].lru++;
                 }
             }
-            iCache.sets[loc].lines[i].lru = 0;
+            lines[i].lru = 0;
             return icacheHitTime;
-        }
-        if (iCache.sets[loc].lines[i].lru > lru) {
-            lru = iCache.sets[loc].lines[i].lru;
-            pos = i;
         }
     }
 
     // cache miss
-    icacheMisses++;
-    for (uint32_t j = 0; j < icacheAssoc; j++) {
-        if (iCache.sets[loc].lines[j].lru < lru) {
-            iCache.sets[loc].lines[j].lru++;
+    uint32_t penalty = l2cache_access(addr);
+
+    uint8_t pos = 0; // position to replace on cache miss
+    for (uint32_t i = 0; i < icacheAssoc; i++) {
+        if (lines[i].lru > lines[pos].lru) {
+            pos = i;
         }
     }
-    iCache.sets[loc].lines[pos].lru = 0;
-    iCache.sets[loc].lines[pos].tag = tag;
-    uint32_t penalty = l2cache_access(addr);
+    for (uint32_t j = 0; j < icacheAssoc; j++) {
+        if (lines[j].lru < lines[pos].lru) {
+            lines[j].lru++;
+        }
+    }
+    lines[pos].lru = 0;
+    lines[pos].tag = tag;
+
+    icacheMisses++;
     icachePenalties += penalty;
     return icacheHitTime + penalty;
 }
@@ -195,35 +196,38 @@ dcache_access(uint32_t addr)
     dcacheRefs++;
     uint32_t tag = addr >> (dBits + blockBits);
     uint32_t loc = (addr >> blockBits) & (dcacheSets - 1u);
-    uint8_t lru = 0; // largest LRU bits encountered (-1 is largest)
-    uint8_t pos = 0; // position to replace on cache miss
+    CacheLine *lines = dCache.sets[loc].lines;
     for (uint32_t i = 0; i < dcacheAssoc; i++) {
-        if (dCache.sets[loc].lines[i].lru < dcacheAssoc && dCache.sets[loc].lines[i].tag == tag) {
+        if (lines[i].lru < dcacheAssoc && lines[i].tag == tag) {
             // cache hit
             for (uint32_t j = 0; j < dcacheAssoc; j++) {
-                if (dCache.sets[loc].lines[j].lru < dCache.sets[loc].lines[i].lru) {
-                    dCache.sets[loc].lines[j].lru++;
+                if (lines[j].lru < lines[i].lru) {
+                    lines[j].lru++;
                 }
             }
-            dCache.sets[loc].lines[i].lru = 0;
+            lines[i].lru = 0;
             return dcacheHitTime;
-        }
-        if (dCache.sets[loc].lines[i].lru > lru) {
-            lru = dCache.sets[loc].lines[i].lru;
-            pos = i;
         }
     }
 
     // cache miss
-    dcacheMisses++;
-    for (uint32_t j = 0; j < dcacheAssoc; j++) {
-        if (dCache.sets[loc].lines[j].lru < lru) {
-            dCache.sets[loc].lines[j].lru++;
+    uint32_t penalty = l2cache_access(addr);
+
+    uint8_t pos = 0; // position to replace on cache miss
+    for (uint32_t i = 0; i < dcacheAssoc; i++) {
+        if (lines[i].lru > lines[pos].lru) {
+            pos = i;
         }
     }
-    dCache.sets[loc].lines[pos].lru = 0;
-    dCache.sets[loc].lines[pos].tag = tag;
-    uint32_t penalty = l2cache_access(addr);
+    for (uint32_t j = 0; j < dcacheAssoc; j++) {
+        if (lines[j].lru < lines[pos].lru) {
+            lines[j].lru++;
+        }
+    }
+    lines[pos].lru = 0;
+    lines[pos].tag = tag;
+
+    dcacheMisses++;
     dcachePenalties += penalty;
     return dcacheHitTime + penalty;
 }
@@ -234,15 +238,16 @@ void icache_invalid(uint32_t addr) {
     }
     uint32_t tag = addr >> (iBits + blockBits);
     uint32_t loc = (addr >> blockBits) & (icacheSets - 1u);
+    CacheLine *lines = iCache.sets[loc].lines;
     for (uint32_t i = 0; i < icacheAssoc; i++) {
-        if (iCache.sets[loc].lines[i].lru < icacheAssoc && iCache.sets[loc].lines[i].tag == tag) {
+        if (lines[i].lru < icacheAssoc && lines[i].tag == tag) {
             // cache hit
             for (uint32_t j = 0; j < icacheAssoc; j++) {
-                if (iCache.sets[loc].lines[j].lru < icacheAssoc && iCache.sets[loc].lines[j].lru > iCache.sets[loc].lines[i].lru) {
-                    iCache.sets[loc].lines[j].lru--;
+                if (lines[j].lru < icacheAssoc && lines[j].lru > lines[i].lru) {
+                    lines[j].lru--;
                 }
             }
-            iCache.sets[loc].lines[i].lru = -1;
+            lines[i].lru = icacheAssoc;
             return;
         }
     }
@@ -254,15 +259,16 @@ void dcache_invalid(uint32_t addr) {
     }
     uint32_t tag = addr >> (dBits + blockBits);
     uint32_t loc = (addr >> blockBits) & (dcacheSets - 1u);
+    CacheLine *lines = dCache.sets[loc].lines;
     for (uint32_t i = 0; i < dcacheAssoc; i++) {
-        if (dCache.sets[loc].lines[i].lru < dcacheAssoc && dCache.sets[loc].lines[i].tag == tag) {
+        if (lines[i].lru < dcacheAssoc && lines[i].tag == tag) {
             // cache hit
             for (uint32_t j = 0; j < dcacheAssoc; j++) {
-                if (dCache.sets[loc].lines[j].lru < icacheAssoc && dCache.sets[loc].lines[j].lru > dCache.sets[loc].lines[i].lru) {
-                    dCache.sets[loc].lines[j].lru--;
+                if (lines[j].lru < dcacheAssoc && lines[j].lru > lines[i].lru) {
+                    lines[j].lru--;
                 }
             }
-            dCache.sets[loc].lines[i].lru = -1;
+            lines[i].lru = dcacheAssoc;
             return;
         }
     }
@@ -280,40 +286,44 @@ l2cache_access(uint32_t addr)
     l2cacheRefs++;
     uint32_t tag = addr >> (l2Bits + blockBits);
     uint32_t loc = (addr >> blockBits) & (l2cacheSets - 1u);
-    uint8_t lru = 0; // largest LRU bits encountered (-1 is largest)
-    uint8_t pos = 0; // position to replace on cache miss
+    CacheLine *lines = l2Cache.sets[loc].lines;
+
     for (uint32_t i = 0; i < l2cacheAssoc; i++) {
-        if (l2Cache.sets[loc].lines[i].lru < l2cacheAssoc && l2Cache.sets[loc].lines[i].tag == tag) {
+        if (lines[i].lru < l2cacheAssoc && lines[i].tag == tag) {
             // cache hit
             for (uint32_t j = 0; j < l2cacheAssoc; j++) {
-                if (l2Cache.sets[loc].lines[j].lru < l2Cache.sets[loc].lines[i].lru) {
-                    l2Cache.sets[loc].lines[j].lru++;
+                if (lines[j].lru < lines[i].lru) {
+                    lines[j].lru++;
                 }
             }
-            l2Cache.sets[loc].lines[i].lru = 0;
+            lines[i].lru = 0;
             return l2cacheHitTime;
-        }
-        if (l2Cache.sets[loc].lines[i].lru > lru) {
-            lru = l2Cache.sets[loc].lines[i].lru;
-            pos = i;
         }
     }
 
     // cache miss
-    l2cacheMisses++;
-    for (uint32_t j = 0; j < l2cacheAssoc; j++) {
-        if (l2Cache.sets[loc].lines[j].lru < lru) {
-            l2Cache.sets[loc].lines[j].lru++;
+    uint32_t penalty = memspeed;
+
+    uint8_t pos = 0; // position to replace on cache miss
+    for (uint32_t i = 0; i < l2cacheAssoc; i++) {
+        if (lines[i].lru > lines[pos].lru) {
+            pos = i;
         }
     }
-    if (inclusive) {
-        // TODO debug
+    if (inclusive && lines[pos].lru < l2cacheAssoc) {
+        uint32_t addr = (lines[pos].tag << (l2Bits + blockBits)) | (loc << blockBits);
         icache_invalid(addr);
         dcache_invalid(addr);
     }
-    l2Cache.sets[loc].lines[pos].lru = 0;
-    l2Cache.sets[loc].lines[pos].tag = tag;
-    uint32_t penalty = memspeed;
+    for (uint32_t j = 0; j < l2cacheAssoc; j++) {
+        if (lines[j].lru < lines[pos].lru) {
+            lines[j].lru++;
+        }
+    }
+    lines[pos].lru = 0;
+    lines[pos].tag = tag;
+
+    l2cacheMisses++;
     l2cachePenalties += penalty;
     return l2cacheHitTime + penalty;
 }
